@@ -2,6 +2,15 @@
 
 from random import random, shuffle
 import sys, math
+import numpy as np
+
+def unique(a):
+    order = np.lexsort(a.T)
+    a = a[order]
+    diff = np.diff(a, axis=0)
+    ui = np.ones(len(a), 'bool')
+    ui[1:] = (diff != 0).any(axis=1) 
+    return a[ui]
 
 if len(sys.argv) == 4:
     w, h, mines = [int(i) for i in sys.argv[1:]]
@@ -13,14 +22,14 @@ class Case:
         self.visible = False;
         self.minesAround = 0; # -1 -> it's a mine
         self.probOfMine = 0;
-        self._neighbors = [] # contain non visible neighbors
+        self.neighbors = [] # contain non visible neighbors
 
     def isMine(self):
         return self.minesAround < 0
 
     # keep only non visible cases
     def refreshNeighbors(self):
-        self._neighbors = [i for i in self._neighbors if not i.visible]
+        self.neighbors = [i for i in self.neighbors if not i.visible]
 
     def printCase(self, force=False):
         if not self.visible and not force:
@@ -134,21 +143,21 @@ class Board:
             return True
         if case.minesAround == 0: # Let's reveal more!
             if x > 0:
-                self.reveal(x-1, y)
+                self._reveal(x-1, y)
                 if y > 0:
-                    self.reveal(x-1, y-1)
+                    self._reveal(x-1, y-1)
                 if y < self._height-1:
-                    self.reveal(x-1, y+1)
+                    self._reveal(x-1, y+1)
             if x < self._width-1:
-                self.reveal(x+1, y)
+                self._reveal(x+1, y)
                 if y > 0:
-                    self.reveal(x+1, y-1)
+                    self._reveal(x+1, y-1)
                 if y < self._height-1:
-                    self.reveal(x+1, y+1)
+                    self._reveal(x+1, y+1)
             if y > 0:
-                self.reveal(x, y-1)
+                self._reveal(x, y-1)
             if y < self._height-1:
-                self.reveal(x, y+1)
+                self._reveal(x, y+1)
         return False
 
     def refreshCases(self):
@@ -172,6 +181,7 @@ class Board:
         for v in visi:
             for c in v.neighbors:
                 params.add(c)
+        print('params:', len(params))
         params = list(params)
         # M * a = b
         linsys = []
@@ -179,7 +189,14 @@ class Board:
         for v in visi:
             b.append(v.minesAround)
             linsys.append([int(p in v.neighbors) for p in params])
+        linsys = np.array(linsys)
+        b = np.array([[i] for i in b])
+        print('M:', linsys)
+        print('B:', b)
+        sol = GEPP(linsys, b)
         print(linsys)
+        print(sol)
+        print(b)
 
 
 
