@@ -1,16 +1,9 @@
 #! /usr/bin/env python3
 
-from random import random, shuffle
+from random import random, shuffle, randint
+from scipy.linalg import lu, inv
 import sys, math
 import numpy as np
-
-def unique(a):
-    order = np.lexsort(a.T)
-    a = a[order]
-    diff = np.diff(a, axis=0)
-    ui = np.ones(len(a), 'bool')
-    ui[1:] = (diff != 0).any(axis=1) 
-    return a[ui]
 
 if len(sys.argv) == 4:
     w, h, mines = [int(i) for i in sys.argv[1:]]
@@ -18,11 +11,14 @@ else:
     w, h, mines = [int(i) for i in input('Give width height mines: ').split(' ')]
 
 class Case:
-    def __init__(self):
+    def __init__(self, x, y):
         self.visible = False;
+        self.marked = False; # marked as a mine by the user
         self.minesAround = 0; # -1 -> it's a mine
         self.probOfMine = 0;
         self.neighbors = [] # contain non visible neighbors
+        self.x = x
+        self.y = y
 
     def isMine(self):
         return self.minesAround < 0
@@ -32,15 +28,52 @@ class Case:
         self.neighbors = [i for i in self.neighbors if not i.visible]
 
     def printCase(self, force=False):
-        if not self.visible and not force:
+        if not self.visible and not force and not self.marked:
             print('-', end=' ')
         else:
-            print('*' if self.isMine() else str(self.minesAround), end=' ')
+            if self.marked:
+                print('#', end=' ')
+            else:
+                print('*' if self.isMine() else str(self.minesAround), end=' ')
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
+
+    # I'd prefer not to do that...
+    def __hash__(self):
+        return self.x+self.y
+
+# Case with a prob of being a mine and operator overload
+class GuessCase(Case):
+    def __init__(self, case, prob):
+        super(GuessCase, self).__init__(case.x, case.y)
+        self.prob = prob
+
+    def __le__(self, other):
+        return self.prob <= other.prob
+
+    def __str__(self):
+        return '('+str(self.x)+','+str(self.y)+';'+str(self.prob)+')'
+
+# remove duplicated lines in a matrix
+def removeDuplicates(a, b):
+    a = np.column_stack((a, b))
+    order = np.lexsort(a.T)
+    a = a[order]
+    diff = np.diff(a, axis=0)
+    ui = np.ones(len(a), 'bool')
+    ui[1:] = (diff != 0).any(axis=1)
+    a = a[ui]
+    if len(a) == 0:
+        return a, a
+    end = (a.size / len(a) - 1)
+    return a[:,0:end], a[:, end:(end+1)]
 
 class Board:
     def __init__(self, width, height, mines):
         self._randoms = []
         self._mines = mines
+        self._foundMines = 0
         self._dirty = False
         self.resize(width, height)
         self.generateMines(mines);
@@ -50,7 +83,7 @@ class Board:
         self._width = width;
         self._height = height;
         self._dirty = True
-        self._array = [ [ Case() for i in range(width) ] for j in range(height) ]
+        self._array = [ [ Case(i, j) for i in range(width) ] for j in range(height) ]
         self.generateNeighbors()
 
     # generate the neighbors list for every case
@@ -91,10 +124,13 @@ class Board:
     # this function must be called only once after a resize
     def generateMines(self, n):
         self._mines =  min(self._width * self._height, n) # limit number of mines
+        self._foundMines = 0
+        self._minesCases = []
         while n > 0:
             x, y = self.getRandomPos()
             n -= 1
             self._array[y][x].minesAround = -1
+            self._minesCases.append(self._array[y][x])
             if x > 0:
                 if not self._array[y][x-1].isMine():
                     self._array[y][x-1].minesAround += 1
@@ -128,8 +164,11 @@ class Board:
 
     # Reveal a case and return True is you lost (revealed a mine)
     # reveals adjacent cases when revealing a 0
-    def reveal(self, x, y):
-        r = self._reveal(x, y)
+    def reveal(self, x, y=0):
+        if issubclass(type(x), Case):
+            r = self._reveal(x.x, x.y)
+        else:
+            r = self._reveal(x, y)
         self.refreshCases()
         return r
 
@@ -167,7 +206,7 @@ class Board:
 
     # get visible cases that can help determine mines around
     # ignore 0 and invisble case
-    def getVisibleCase(self):
+    def getVisibleCases(self):
         r = []
         for row in self._array:
             for c in row:
@@ -175,36 +214,80 @@ class Board:
                     r.append(c)
         return r
 
-    def calcProbs(self):
-        visi = self.getVisibleCase()
+    def getBestGuess(self):
+        best = self.generateProbs()
+        a = [best[0]]
+        i = 1
+        while i < len(a) and best[i] <= a[0]:
+            a.append(best[i])
+            i += 1
+        return a[randint(0, len(a)-1)]
+
+    def generateProbs(self):
+        # first get non visible neighbors that can be used for the system
+        visi = self.getVisibleCases();
         params = set()
         for v in visi:
             for c in v.neighbors:
                 params.add(c)
         print('params:', len(params))
         params = list(params)
-        # M * a = b
-        linsys = []
-        b = []
-        for v in visi:
-            b.append(v.minesAround)
-            linsys.append([int(p in v.neighbors) for p in params])
-        linsys = np.array(linsys)
-        b = np.array([[i] for i in b])
-        print('M:', linsys)
-        print('B:', b)
-        sol = GEPP(linsys, b)
-        print(linsys)
-        print(sol)
-        print(b)
 
+        # container of the system
+        # at the end linsys will be like ( [0, 1, 1], 1 )
+        sysMat = []
+        bVec = []
+        for v in visi:
+            bVec.append(v.minesAround)
+            sysMat.append([int(p in v.neighbors) for p in params])
+
+        # stop earlier if possible
+        if len(bVec) == 0: # Beginning of the game. Just return a random Case
+            return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], 0)]
+
+        # convert to np.array and remove duplicated rows
+        sysMat = np.array(sysMat)
+        bVec = np.array([[i] for i in bVec])
+        sysMat, bVec = removeDuplicates(sysMat, bVec);
+
+        # look for some magic
+        onlyOnes = True # check if the matrix is Ones only
+        sumVec = [] # sum of the line
+        for i in range(len(bVec)):
+            s = sum(sysMat[i])
+            if s == bVec[i]: # these are mines!
+                for k in range(len(params)):
+                    if sysMat[i][k]:
+                        if not params[k].marked:
+                            self._foundMines += 1
+                            params[k].marked = True
+
+        return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], 0)]
+
+    def isOver(self):
+        if self._foundMines == self._mines:
+            return True
+        for c in self._minesCases:
+            if c.visible:
+                return True
+        return False
 
 
 board = Board(w, h, mines)
 board.printSolution()
 print('---')
-board.reveal(1, 1)
-board.calcProbs()
-board.printBoard()
+print('Game Start')
+print('---')
+lost = False
+c = board.getBestGuess()
+while not lost and not board.isOver():
+    print('Revealing', str(c))
+    lost = board.reveal(c)
+    c = board.getBestGuess()
+    board.printBoard()
+if lost:
+    print('Bot lost :(')
+print('---')
+print('Game End')
 print('---')
 
