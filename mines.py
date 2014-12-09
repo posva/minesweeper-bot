@@ -33,6 +33,8 @@ class Case:
         else:
             if self.marked:
                 print('#', end=' ')
+            elif self.minesAround == 0:
+                print(' ', end=' ')
             else:
                 print('*' if self.isMine() else str(self.minesAround), end=' ')
 
@@ -55,9 +57,13 @@ class GuessCase(Case):
     def __str__(self):
         return '('+str(self.x)+','+str(self.y)+';'+str(self.prob)+')'
 
-# remove duplicated lines in a matrix
-def removeDuplicates(a, b):
+# remove duplicated and null rows in a matrix
+def cleanSystem(a, b):
     a = np.column_stack((a, b))
+    bef = len(a)
+    print('Removing 0 from '+str(len(a)))
+    a = a[~np.all(a == 0, axis=1)]
+    print(len(a))
     order = np.lexsort(a.T)
     a = a[order]
     diff = np.diff(a, axis=0)
@@ -66,6 +72,7 @@ def removeDuplicates(a, b):
     a = a[ui]
     if len(a) == 0:
         return a, a
+    # remove zeros
     end = (a.size / len(a) - 1)
     return a[:,0:end], a[:, end:(end+1)]
 
@@ -215,12 +222,15 @@ class Board:
         return r
 
     def getBestGuess(self):
+        # best is sorted, we can use that
         best = self.generateProbs()
         a = [best[0]]
         i = 1
+        # Stack best choices by getting the best ones
         while i < len(a) and best[i] <= a[0]:
             a.append(best[i])
             i += 1
+        # Get randomly one of them
         return a[randint(0, len(a)-1)]
 
     def generateProbs(self):
@@ -238,18 +248,32 @@ class Board:
         sysMat = []
         bVec = []
         for v in visi:
-            bVec.append(v.minesAround)
-            sysMat.append([int(p in v.neighbors) for p in params])
+            bVec.append(v.minesAround - sum([1 for p in params if p.marked and p in v.neighbors]))
+            sysMat.append([int(p in v.neighbors) for p in params if not p.marked])
+
+        # update params array with non-marked cases only
+        params = [p for p in params if not p.marked]
 
         # stop earlier if possible
         if len(bVec) == 0: # Beginning of the game. Just return a random Case
+            print('First guess')
             return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], 0)]
 
         # convert to np.array and remove duplicated rows
         sysMat = np.array(sysMat)
         bVec = np.array([[i] for i in bVec])
-        sysMat, bVec = removeDuplicates(sysMat, bVec);
+        sysMat, bVec = cleanSystem(sysMat, bVec);
+        print('A', sysMat)
+        print('b', bVec)
 
+        # Search for bVec = 0. Theses cases are safe
+        # TODO caches safe values and avoid all calcs
+        for i in range(len(bVec)):
+            if bVec[i] == 0:
+                print('Found a safe Case!')
+                return [GuessCase(params[k], 0) for k in range(len(params)) if sysMat[i][k]]
+
+# TODO do the mine marking just after first matrix computation and then recompute the matrix and them do the logic (starting at len(bVec) == 0
         # look for some magic
         onlyOnes = True # check if the matrix is Ones only
         sumVec = [] # sum of the line
@@ -262,6 +286,7 @@ class Board:
                             self._foundMines += 1
                             params[k].marked = True
 
+        print('Revealing with random :(')
         return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], 0)]
 
     def isOver(self):
@@ -285,8 +310,11 @@ while not lost and not board.isOver():
     lost = board.reveal(c)
     c = board.getBestGuess()
     board.printBoard()
+    input()
 if lost:
     print('Bot lost :(')
+    board.printSolution()
+print('---')
 print('---')
 print('Game End')
 print('---')
