@@ -116,7 +116,7 @@ class Board:
                 if y < self._height-1:
                     c.neighbors.append(self._array[y+1][x])
 
-    # generate random positions in grid
+    # generate random positions in grid no repetition until list is empty
     def getRandomPos(self):
         if len(self._randoms) == 0 or self._dirty: # gen the randomizer
             self._randoms = []
@@ -181,29 +181,18 @@ class Board:
 
     def _reveal(self, x, y):
         case = self._array[y][x]
-        if case.visible:
-            return False
-        case.visible = True
-        case.probOfMine = 0 # TODO
-        if case.isMine():
+        if case.isMine(): # don't enter the loop, we lost :(
+            case.visible = True
             return True
-        if case.minesAround == 0: # Let's reveal more!
-            if x > 0:
-                self._reveal(x-1, y)
-                if y > 0:
-                    self._reveal(x-1, y-1)
-                if y < self._height-1:
-                    self._reveal(x-1, y+1)
-            if x < self._width-1:
-                self._reveal(x+1, y)
-                if y > 0:
-                    self._reveal(x+1, y-1)
-                if y < self._height-1:
-                    self._reveal(x+1, y+1)
-            if y > 0:
-                self._reveal(x, y-1)
-            if y < self._height-1:
-                self._reveal(x, y+1)
+        rev = set() # add the cases that must be revealed
+        rev.add(case)
+        while len(rev) > 0:
+            case = rev.pop()
+            case.visible = True
+            if case.minesAround == 0: # reveal moar
+                for c in case.neighbors:
+                    if not c.visible: # prevent infinite loop
+                        rev.add(c)
         return False
 
     def refreshCases(self):
@@ -310,7 +299,7 @@ while not lost and not board.isOver():
     lost = board.reveal(c)
     c = board.getBestGuess()
     board.printBoard()
-    input()
+    #input()
 if lost:
     print('Bot lost :(')
     board.printSolution()
