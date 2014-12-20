@@ -1,9 +1,12 @@
 #! /usr/bin/env python3
 
 from random import random, shuffle, randint
-from scipy.linalg import lu, inv
 import sys, math
+# Matrix manipulation
+from scipy.linalg import lu, inv
 import numpy as np
+# colors
+from colorama import init, Fore, Back, Style
 
 if len(sys.argv) == 4:
     w, h, mines = [int(i) for i in sys.argv[1:]]
@@ -32,11 +35,13 @@ class Case:
             print('-', end=' ')
         else:
             if self.marked:
-                print('#', end=' ')
+                print(Fore.CYAN + Back.MAGENTA + '🏁 ' + Back.WHITE + Fore.BLACK, end='')
             elif self.minesAround == 0:
                 print(' ', end=' ')
+            elif self.isMine():
+                print(Back.RED + Style.BRIGHT + '💣 ' + Style.NORMAL + Back.WHITE, end='')
             else:
-                print('*' if self.isMine() else str(self.minesAround), end=' ')
+                print(str(self.minesAround), end=' ')
 
     def __eq__(self, other):
         return self.x == other.x and self.y == other.y
@@ -61,9 +66,9 @@ class GuessCase(Case):
 def cleanSystem(a, b):
     a = np.column_stack((a, b))
     bef = len(a)
-    print('Removing 0 from '+str(len(a)))
+    #print('Removing 0 from '+str(len(a)))
     a = a[~np.all(a == 0, axis=1)]
-    print(len(a))
+    #print(len(a))
     order = np.lexsort(a.T)
     a = a[order]
     diff = np.diff(a, axis=0)
@@ -82,6 +87,7 @@ class Board:
         self._mines = mines
         self._foundMines = 0
         self._dirty = False
+        self.revealableMines = [] # mines that doesn't have a 100% prob of being a mine
         self.resize(width, height)
         self.generateMines(mines);
 
@@ -91,6 +97,10 @@ class Board:
         self._height = height;
         self._dirty = True
         self._array = [ [ Case(i, j) for i in range(width) ] for j in range(height) ]
+        self.revealableMines = []
+        for row in self._array:
+            for c in row:
+                self.revealableMines.append(c)
         self.generateNeighbors()
 
     # generate the neighbors list for every case
@@ -119,7 +129,7 @@ class Board:
     # generate random positions in grid no repetition until list is empty
     def getRandomPos(self):
         if len(self._randoms) == 0 or self._dirty: # gen the randomizer
-            self._randoms = []
+            self._randoms.clear()
             self._dirty = False
             for y in range(self._height):
                 for x in range(self._width):
@@ -133,6 +143,11 @@ class Board:
         self._mines =  min(self._width * self._height, n) # limit number of mines
         self._foundMines = 0
         self._minesCases = []
+        self.guesses = 0 # number of reveals he made
+        self.randoms = 0 # number of random guesses
+        self.secure = 0 # number of secure guesses
+        # reset randomPos
+        self._randoms.clear()
         while n > 0:
             x, y = self.getRandomPos()
             n -= 1
@@ -158,16 +173,20 @@ class Board:
                 self._array[y+1][x].minesAround += 1
 
     def printBoard(self):
+        print(Back.WHITE + Fore.BLACK, end='')
         for row in self._array:
             for c in row:
                 c.printCase()
             print() # new line
+        print(Style.RESET_ALL)
 
     def printSolution(self):
+        print(Back.WHITE + Fore.BLACK, end='')
         for row in self._array:
             for c in row:
                 c.printCase(True)
             print() # new line
+        print(Style.RESET_ALL)
 
     # Reveal a case and return True is you lost (revealed a mine)
     # reveals adjacent cases when revealing a 0
@@ -189,6 +208,7 @@ class Board:
         while len(rev) > 0:
             case = rev.pop()
             case.visible = True
+            self.revealableMines.remove(case)
             if case.minesAround == 0: # reveal moar
                 for c in case.neighbors:
                     if not c.visible: # prevent infinite loop
@@ -229,7 +249,7 @@ class Board:
         for v in visi:
             for c in v.neighbors:
                 params.add(c)
-        print('params:', len(params))
+        #print('params:', len(params))
         params = list(params)
 
         # container of the system
@@ -245,26 +265,10 @@ class Board:
 
         # stop earlier if possible
         if len(bVec) == 0: # Beginning of the game. Just return a random Case
-            print('First guess')
-            return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], 0)]
+            #print('First guess')
+            return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], self._mines / (self._width * self._height))]
 
-        # convert to np.array and remove duplicated rows
-        sysMat = np.array(sysMat)
-        bVec = np.array([[i] for i in bVec])
-        sysMat, bVec = cleanSystem(sysMat, bVec);
-        print('A', sysMat)
-        print('b', bVec)
-
-        # Search for bVec = 0. Theses cases are safe
-        # TODO caches safe values and avoid all calcs
-        for i in range(len(bVec)):
-            if bVec[i] == 0:
-                print('Found a safe Case!')
-                return [GuessCase(params[k], 0) for k in range(len(params)) if sysMat[i][k]]
-
-# TODO do the mine marking just after first matrix computation and then recompute the matrix and them do the logic (starting at len(bVec) == 0
-        # look for some magic
-        onlyOnes = True # check if the matrix is Ones only
+        # look for 100% porb mines in order to discard them when picking random cases
         sumVec = [] # sum of the line
         for i in range(len(bVec)):
             s = sum(sysMat[i])
@@ -275,8 +279,48 @@ class Board:
                             self._foundMines += 1
                             params[k].marked = True
 
-        print('Revealing with random :(')
-        return [GuessCase(self._array[randint(0, self._height-1)][randint(0, self._width-1)], 0)]
+        # calc A and b again
+        visi = self.getVisibleCases();
+        params = set()
+        for v in visi:
+            for c in v.neighbors:
+                params.add(c)
+        #print('params:', len(params))
+        params = list(params)
+
+        # container of the system
+        # at the end linsys will be like ( [0, 1, 1], 1 )
+        sysMat = []
+        bVec = []
+        for v in visi:
+            bVec.append(v.minesAround - sum([1 for p in params if p.marked and p in v.neighbors]))
+            sysMat.append([int(p in v.neighbors) for p in params if not p.marked])
+
+        # update params array with non-marked cases only
+        params = [p for p in params if not p.marked]
+
+
+        # convert to np.array and remove duplicated rows
+        sysMat = np.array(sysMat)
+        bVec = np.array([[i] for i in bVec])
+        sysMat, bVec = cleanSystem(sysMat, bVec);
+        #print('A', sysMat)
+        #print('b', bVec)
+
+        # Search for bVec = 0. Theses cases are safe
+        # TODO caches safe values and avoid all calcs
+        for i in range(len(bVec)):
+            if bVec[i] == 0:
+                #print('Found a safe Case!')
+                self.secure += 1
+                return [GuessCase(params[k], 0) for k in range(len(params)) if sysMat[i][k]]
+
+        # look for some magic
+        onlyOnes = True # check if the matrix is Ones only
+
+        #print('Revealing with random :(')
+        self.randoms += 1
+        return [GuessCase(self.revealableMines[randint(0, len(self.revealableMines)-1)], 2)]
 
     def isOver(self):
         if self._foundMines == self._mines:
@@ -298,12 +342,16 @@ while not lost and not board.isOver():
     print('Revealing', str(c))
     lost = board.reveal(c)
     c = board.getBestGuess()
-    board.printBoard()
+    board.guesses += 1
+    #board.printBoard()
     #input()
 if lost:
-    print('Bot lost :(')
+    print(Back.RED+'Bot lost :('+Style.RESET_ALL)
     board.printSolution()
+else:
+    print(Back.GREEN+Fore.BLACK+'Bot won :D'+Style.RESET_ALL)
 print('---')
+print('Guesses: %d, randoms: %d, secured %d'%(board.guesses, board.randoms, board.secure))
 print('---')
 print('Game End')
 print('---')
