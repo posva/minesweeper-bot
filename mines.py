@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 
 from random import random, shuffle, randint
-import sys, math
+import sys, math, json, os
 # Matrix manipulation
 from scipy.linalg import lu, inv
 import numpy as np
@@ -356,3 +356,27 @@ print('---')
 print('Game End')
 print('---')
 
+# Save data for stats
+version = '0.1'
+stats = 'stats-'+str(board._width)+'x'+str(board._height)+':'+str(board._mines)+'.json'
+if os.path.isfile(stats):
+    jsonFile = open(stats)
+    data = json.load(jsonFile)
+else:
+    jsonFile = None
+    data = None
+games = None
+if data == None:
+    data = []
+for d in data:
+    if d['version'] == version:
+        games = d['games']
+if jsonFile != None:
+    jsonFile.close()
+if games == None:
+    obj = { "version": version, "games": [] }
+    data.append(obj)
+    games = obj["games"]
+games.append({ "win": not lost, "randoms": board.randoms, "secure": board.secure })
+with open(stats, 'w') as outfile:
+    json.dump(data, outfile)
